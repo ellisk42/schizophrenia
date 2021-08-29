@@ -62,6 +62,44 @@ class LatentGP(nn.Module):
 
         mu = torch.zeros(sigma.shape[0])
         return torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
+
+    def joint_covariance(self, T, noise=None):
+        K = self.latent_covariance(T)
+        
+        A_p = torch.cat([torch.eye(self.D), self.A], 0)
+        
+        block_affine = torch.kron(A_p, torch.eye(T.shape[0]))
+        return block_affine @ K @ block_affine.T
+
+    def joint_distribution(self, T, noise=None):
+        s = self.joint_covariance(T)
+        if noise:
+            s += noise*torch.eye(s.shape[0])
+            
+        mu = torch.zeros(s.shape[0])
+        
+        return torch.distributions.multivariate_normal.MultivariateNormal(mu, s)
+
+    def conditional_distribution(self, T, X, noise=None):
+        assert X.shape[0] == T.shape[0]
+        assert X.shape[1] == self.N
+
+        td = T.shape[0] * self.D
+
+        sigma = self.joint_covariance(T)
+        if noise: sigma = sigma + torch.eye(sigma.shape[0])
+        s11 = sigma[:td, :td]
+        s22 = sigma[td:, td:]
+        s12 = sigma[:td, td:]
+        s21 = sigma[td:, :td]
+
+        X = vectorize(X)
+
+        mu = s12@(torch.linalg.inv(s22))@X
+        s = s11 - s12@torch.linalg.inv(s22)@s21
+        
+        return torch.distributions.multivariate_normal.MultivariateNormal(mu, s)
+        
         
 
 def vectorize(a):
@@ -136,18 +174,9 @@ for attempt in range(attempts):
     vZ = dZ.sample()
     Z = reshape(vZ, T, D)
 
-    for l in range(0):
+    for l in range(D):
         plt.plot(X, Z.numpy()[:,l],
-                 c="b")
-    
-    d_observed_signals = model.observed_distribution(X, NOISE)
-    v_observed_signals = d_observed_signals.sample()
-    observed_signals = reshape(v_observed_signals, T, N)
-    for l in range(0):
-        plt.plot(X, observed_signals.numpy()[:,l],
-                 c="k")
-
-    
+                 c="b", label="latent")
     
     observed_signals = Z@model.A.T
     #v(ab)=b.t (*) I   @ v(a)
@@ -159,14 +188,30 @@ for attempt in range(attempts):
 
     for l in range(N):
         plt.plot(X, observed_signals.detach().numpy()[:,l],
-                 c="r", ls="--", label="training")
+                 c="r", label="training")
 
+    joint_sample = model.joint_distribution(X, NOISE).sample()
+    joint_sample_latent = reshape(joint_sample[:D*T], T, D)
+    joint_sample_observed = reshape(joint_sample[D*T:], T, N)
+    for l in range(D):
+        plt.plot(X, joint_sample_latent.numpy()[:,l],
+                 ls="--", c="b", label="latent joint")
+    for l in range(N):
+        plt.plot(X, joint_sample_observed.numpy()[:,l],
+                 ls="--", c="r", label="obs joint")
+
+    
+
+    conditional_inference = reshape(model.conditional_distribution(X, observed_signals, NOISE*1e-3).mean, T, D)
+    for l in range(D):
+        plt.plot(X,  conditional_inference.detach().numpy()[:,l],
+                 c="g", ls="-", label="conditional")
+    
+    continue
+    
     
 
     model = LatentGP(D, N)
-    
-    
-    
     
     optimizer = torch.optim.Adam(model.parameters())
     
@@ -200,4 +245,5 @@ for attempt in range(attempts):
                  label='predicted')
     
 
+plt.legend()
 plt.show()
