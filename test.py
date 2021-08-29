@@ -20,26 +20,42 @@ class LatentGP(nn.Module):
                               requires_grad=True)
 
         self.kernel_scale = nn.Parameter(torch.randn(D), requires_grad=True)
-        self.kernel_magnitude = nn.Parameter(torch.randn(D), requires_grad=True)
+        #self.kernel_magnitude = nn.Parameter(torch.randn(D), requires_grad=True)
 
-    def observed_covariance(self, T):
+    def latent_covariance(self, T):
         distances = T.unsqueeze(0) - T.unsqueeze(1)
         distances = distances**2
+        distances = distances.unsqueeze(0)
 
-        distances = -distances.unsqueeze(-1)/((2*self.kernel_scale**2).unsqueeze(0).unsqueeze(0))
+        scale = self.kernel_scale**2
+        scale = scale.unsqueeze(-1).unsqueeze(-1)
 
-        K = self.kernel_magnitude * self.kernel_magnitude * distances.exp()
+        magnitude = 1
+        #magnitude = self.kernel_magnitude**2
+        #magnitude = magnitude.unsqueeze(-1).unsqueeze(-1)        
+        
+        K = magnitude * (-distances/(2*scale)).exp()
+        
+        return torch.block_diag(*list(K))
 
+    def latent_distribution(self, T, noise=None):
+        sigma = self.latent_covariance(T)
+
+        if noise is not None:
+            sigma = sigma + torch.eye(sigma.shape[0]) * noise
+
+        mu = torch.zeros(sigma.shape[0])
+        return torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
         
         
-        matrix = torch.einsum("abd,nd,md->anbm", K, self.A, self.A)
-
-        return matrix
+    def observed_covariance(self, T):
+        K = self.latent_covariance(T)
+        block_affine = torch.kron(self.A, torch.eye(T.shape[0]))
+        return block_affine @ K @ block_affine.T
+        
 
     def observed_distribution(self, T, noise=None):
-        sigma = self.observed_covariance(T).view(self.N * T.shape[0], self.N * T.shape[0])
-
-        sigma = (sigma + sigma.T)/2
+        sigma = self.observed_covariance(T)
 
         if noise is not None:
             sigma = sigma + torch.eye(sigma.shape[0]) * noise
@@ -96,106 +112,66 @@ for _ in range(100):
     
 
 
-D = 2
-N = 4
+D = 1
+N = 2
+NOISE = 1e-4
 
 plt.figure()
 attempts = 4
 for attempt in range(attempts):
     plt.subplot(int(attempts**0.5),int(attempts**0.5),attempt+1)
 
-    A = np.random.normal(np.zeros((N, D)),
-                         np.ones((N, D)))
+    model = LatentGP(D, N)
 
-    X = np.linspace(0., 1., 40)
+    X = torch.linspace(0., 1., 40)    
     T = X.shape[0]
-    print(T)
-
-    def K(X, parameters=None):
-        
-        return np.array([ [ parameters[0]**2 * np.exp(-(x-y)**2/(2*parameters[1]*parameters[1])) for x in X] for y in X])
-
+    print(T)    
     
-    parameters = np.random.random((D, 2))
-    latent_covariance = block_diag(*[K(X, th) for th in parameters ])
-
-    print(latent_covariance.shape)
-
-    vZ = np.random.multivariate_normal(np.zeros((D*T,)), latent_covariance)
-    Z = np.reshape(vZ, (T,D), order="F")
+    latent_covariance = model.latent_covariance(X)
     
-    
+    print(latent_covariance)
 
-    for l in range(D):
-        plt.plot(X, Z[:,l],
+    dZ = model.latent_distribution(X, noise=NOISE)
+    
+    vZ = dZ.sample()
+    Z = reshape(vZ, T, D)
+
+    for l in range(0):
+        plt.plot(X, Z.numpy()[:,l],
                  c="b")
     
+    d_observed_signals = model.observed_distribution(X, NOISE)
+    v_observed_signals = d_observed_signals.sample()
+    observed_signals = reshape(v_observed_signals, T, N)
+    for l in range(0):
+        plt.plot(X, observed_signals.numpy()[:,l],
+                 c="k")
 
-    block_affine = np.kron(A, np.eye(T))
     
-    # for n in range(N):
-    #     for d in range(D):
-    #         for alpha in range(T):
-    #             for beta in range(T):
-    #                 if np.abs(block_affine)[n+N]:
-    # print("block_affine",block_affine.shape)
-    # print(1*(block_affine!=0.))
-    # assert False
     
-
-    observed_covariance = block_affine @ latent_covariance @ block_affine.T
-    
-    #assert np.all(np.abs(observed_covariance)>1e-3)
-
-    for n in range(0):
-        for _n in range(N):
-            for t in range(T):
-                for _t in range(T):
-                    gt = observed_covariance[T*n+t, T*_n+_t]
-                    prediction = sum( K(X, parameters[d])[t,_t] * A[n,d] * A[_n,d]
-                                      for d in range(D) )
-                    assert (np.abs(gt - prediction)<1e-5)
-    
-                    
-                    import pdb; pdb.set_trace()
-    
-    v_observed_signals = np.random.multivariate_normal(np.zeros((N*T,)), observed_covariance)
-    observed_signals = np.reshape(v_observed_signals, (T, N), order="F")
-    if False:
-        for l in range(N):
-            plt.plot(X, observed_signals[:,l],
-                     c="k")
-
-    observed_signals = Z@A.T
+    observed_signals = Z@model.A.T
     #v(ab)=b.t (*) I   @ v(a)
     #a=Z, b=A.T
     #v(Z@A.T)=(A (*) I)v(z)
     
     
-    #assert np.max(np.abs(vectorize(observed_signals) - block_affine @ vZ)) < 1e-8
-
-    
-    
     
 
     for l in range(N):
-        plt.plot(X, observed_signals[:,l],
-                 c="g", ls="--")
+        plt.plot(X, observed_signals.detach().numpy()[:,l],
+                 c="r", ls="--", label="training")
 
-        
+    
 
     model = LatentGP(D, N)
-    model.A.data = torch.tensor(A).float()
-    model.kernel_scale.data = torch.tensor(parameters[:,1]).float()
-    model.kernel_magnitude.data = torch.tensor(parameters[:,0]).float()
+    
+    
+    
     
     optimizer = torch.optim.Adam(model.parameters())
     
-    for step in range(10):
-        v_observed_signals = torch.tensor(v_observed_signals).float()
-        #v_observed_signals = v_observed_signals.view(T, N).view(-1)
-        
-        distribution = model.observed_distribution(torch.tensor(X).float(), noise=0.0001)
+    for step in range(1000):        
+        distribution = model.observed_distribution(torch.tensor(X).float(), noise=NOISE)
         likelihood = distribution.log_prob(v_observed_signals).sum()
         loss = -likelihood/len(v_observed_signals)
 
@@ -204,20 +180,24 @@ for attempt in range(attempts):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
+        
 
-        if step%100==0: print(step, '\tloss', loss.detach().numpy(),
+        if step%100==0:
+            print(step, '\tloss', loss.detach().numpy(),
                               'likelihood', likelihood.detach().numpy())
+            print(model.A)
+            print()
 
-    print(A)
     print(model.A)
         
     observed_signals = distribution.sample()
     #observed_signals=v_observed_signals
-    observed_signals = observed_signals.view(T, N)
+    observed_signals = reshape(observed_signals, T, N)
     observed_signals = observed_signals.cpu().numpy()
-    for l in range(0):
+    for l in range(N):
         plt.plot(X, observed_signals[:,l],
-                 c="g")
+                 c="g",
+                 label='predicted')
     
 
 plt.show()
