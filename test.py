@@ -100,16 +100,29 @@ class LatentGP(nn.Module):
         
         return torch.distributions.multivariate_normal.MultivariateNormal(mu, s)
 
-    def fit(self, X, observed_signals, steps=1000, noise=None):
-        if len(observed_signals.shape) == 2:
-            observed_signals = vectorize(observed_signals)
+    def fit(self, observed_signals, steps=1000, noise=None):
+        """observed_signals: list of (time_steps, observed_data)
+        think of each list element as a patient
+        observed_data should be a tensor of shape [number_of_time_steps, number_of_signals], or `vectorize` of that
+        """
+
+        def maybe_vectorized(v):
+            if len(v.shape) == 2:
+                return vectorize(v)
+            else:
+                return v
+
+        observed_signals = [(T, maybe_vectorized(X))
+                            for T, X in observed_signals ]            
 
         optimizer = torch.optim.Adam(self.parameters())
 
-        for step in range(1000):        
-            distribution = self.observed_distribution(torch.tensor(X).float(), noise=noise)
-            likelihood = distribution.log_prob(observed_signals).sum()
-            loss = -likelihood/len(observed_signals)
+        for step in range(steps):
+            loss = 0.
+            for T, X in observed_signals:
+                distribution = self.observed_distribution(torch.tensor(T).float(), noise=noise)
+                likelihood = distribution.log_prob(X).sum()
+                loss = loss -likelihood/len(observed_signals)
 
             loss.backward()
             optimizer.step()
@@ -174,75 +187,89 @@ D = 3
 N = 5
 NOISE = 1e-4
 
-plt.figure()
-attempts = 4
-for attempt in range(attempts):
-    plt.subplot(int(attempts**0.5),int(attempts**0.5),attempt+1)
+def visualize_inference(D, N):
+    plt.figure()
+    attempts = 4
+    for attempt in range(attempts):
+        plt.subplot(int(attempts**0.5),int(attempts**0.5),attempt+1)
 
-    model = LatentGP(D, N)
+        model = LatentGP(D, N)
 
-    X = torch.linspace(0., 1., 40)    
-    T = X.shape[0]
-    print(T)    
+        X = torch.linspace(0., 1., 40)    
+        T = X.shape[0]
+        print(T)    
+
+        latent_covariance = model.latent_covariance(X)
+
+        print(latent_covariance)
+
+        dZ = model.latent_distribution(X, noise=NOISE)
+
+        vZ = dZ.sample()
+        Z = reshape(vZ, T, D)
+
+        for l in range(D):
+            plt.plot(X, Z.numpy()[:,l],
+                     c="b", label="latent")
+
+        observed_signals = Z@model.A.T
+        #v(ab)=b.t (*) I   @ v(a)
+        #a=Z, b=A.T
+        #v(Z@A.T)=(A (*) I)v(z)
+
+
+
+
+        for l in range(N):
+            plt.plot(X, observed_signals.detach().numpy()[:,l],
+                     c="r", label="training")
+
+        joint_sample = model.joint_distribution(X, NOISE).sample()
+        joint_sample_latent = reshape(joint_sample[:D*T], T, D)
+        joint_sample_observed = reshape(joint_sample[D*T:], T, N)
+
+        if False:
+            for l in range(D):
+                plt.plot(X, joint_sample_latent.numpy()[:,l],
+                         ls="--", c="b", label="latent joint")
+            for l in range(N):
+                plt.plot(X, joint_sample_observed.numpy()[:,l],
+                         ls="--", c="r", label="obs joint")
+
     
-    latent_covariance = model.latent_covariance(X)
+
+        conditional_inference = reshape(model.conditional_distribution(X, observed_signals, NOISE*1e-3).mean, T, D)
+        for l in range(D):
+            plt.plot(X,  conditional_inference.detach().numpy()[:,l],
+                     c="g", ls="-", label="conditional")
+
+    plt.legend()
+    plt.show()
+
+
+def visualize_fitting(D, N):
+    attempts = 4
+    number_of_patients = 2
     
-    print(latent_covariance)
+    X = torch.linspace(0., 1., 20)    
+    for attempt in range(attempts):
 
-    dZ = model.latent_distribution(X, noise=NOISE)
-    
-    vZ = dZ.sample()
-    Z = reshape(vZ, T, D)
+        model = LatentGP(D, N)
+        
+        ground_truth_observations = [(X, model.observed_distribution(X, NOISE).sample())
+                                     for _ in range(number_of_patients) ]
 
-    for l in range(D):
-        plt.plot(X, Z.numpy()[:,l],
-                 c="b", label="latent")
-    
-    observed_signals = Z@model.A.T
-    #v(ab)=b.t (*) I   @ v(a)
-    #a=Z, b=A.T
-    #v(Z@A.T)=(A (*) I)v(z)
-    
-    
-    
+        best_loss = []
+        ds = list(range(1, D+3))
+        for d in ds:
+            model = LatentGP(d, N)
+            best_loss.append(model.fit(ground_truth_observations, noise=NOISE, steps=5000))
 
-    for l in range(N):
-        plt.plot(X, observed_signals.detach().numpy()[:,l],
-                 c="r", label="training")
+        plt.plot(ds, best_loss)
+    plt.xlabel("number of latent factors")
+    plt.ylabel("loss")
+    plt.title(f"{N} signals, {number_of_patients} tasks (patients)")
+    plt.show()
 
-    joint_sample = model.joint_distribution(X, NOISE).sample()
-    joint_sample_latent = reshape(joint_sample[:D*T], T, D)
-    joint_sample_observed = reshape(joint_sample[D*T:], T, N)
-    for l in range(D):
-        plt.plot(X, joint_sample_latent.numpy()[:,l],
-                 ls="--", c="b", label="latent joint")
-    for l in range(N):
-        plt.plot(X, joint_sample_observed.numpy()[:,l],
-                 ls="--", c="r", label="obs joint")
-
-    
-
-    conditional_inference = reshape(model.conditional_distribution(X, observed_signals, NOISE*1e-3).mean, T, D)
-    for l in range(D):
-        plt.plot(X,  conditional_inference.detach().numpy()[:,l],
-                 c="g", ls="-", label="conditional")
-    
-plt.legend()
-plt.show()
-
-for attempt in range(attempts):
-
-    model = LatentGP(D, N)
-    ground_truth_observation = model.observed_distribution(X, NOISE).sample()
-
-    best_loss = []
-    ds = list(range(1, D+3))
-    for d in ds:
-        model = LatentGP(d, N)
-        best_loss.append(model.fit(X, ground_truth_observation, noise=NOISE))
-
-    plt.plot(ds, best_loss)
-plt.xlabel("number of latent factors")
-plt.ylabel("loss")
-plt.show()
-
+visualize_inference(1, 2)
+visualize_fitting(3, 5)
