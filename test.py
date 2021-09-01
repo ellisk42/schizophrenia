@@ -99,6 +99,26 @@ class LatentGP(nn.Module):
         s = s11 - s12@torch.linalg.inv(s22)@s21
         
         return torch.distributions.multivariate_normal.MultivariateNormal(mu, s)
+
+    def fit(self, X, observed_signals, steps=1000, noise=None):
+        if len(observed_signals.shape) == 2:
+            observed_signals = vectorize(observed_signals)
+
+        optimizer = torch.optim.Adam(self.parameters())
+
+        for step in range(1000):        
+            distribution = self.observed_distribution(torch.tensor(X).float(), noise=noise)
+            likelihood = distribution.log_prob(observed_signals).sum()
+            loss = -likelihood/len(observed_signals)
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            if step%100==0:
+                print(step, '\tloss', loss.detach().numpy(),
+                      'likelihood', likelihood.detach().numpy())
+        return loss.detach().numpy()
         
         
 
@@ -150,8 +170,8 @@ for _ in range(100):
     
 
 
-D = 1
-N = 2
+D = 3
+N = 5
 NOISE = 1e-4
 
 plt.figure()
@@ -207,43 +227,22 @@ for attempt in range(attempts):
         plt.plot(X,  conditional_inference.detach().numpy()[:,l],
                  c="g", ls="-", label="conditional")
     
-    continue
-    
-    
-
-    model = LatentGP(D, N)
-    
-    optimizer = torch.optim.Adam(model.parameters())
-    
-    for step in range(1000):        
-        distribution = model.observed_distribution(torch.tensor(X).float(), noise=NOISE)
-        likelihood = distribution.log_prob(v_observed_signals).sum()
-        loss = -likelihood/len(v_observed_signals)
-
-        #loss += model.A.abs().sum()
-
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        
-
-        if step%100==0:
-            print(step, '\tloss', loss.detach().numpy(),
-                              'likelihood', likelihood.detach().numpy())
-            print(model.A)
-            print()
-
-    print(model.A)
-        
-    observed_signals = distribution.sample()
-    #observed_signals=v_observed_signals
-    observed_signals = reshape(observed_signals, T, N)
-    observed_signals = observed_signals.cpu().numpy()
-    for l in range(N):
-        plt.plot(X, observed_signals[:,l],
-                 c="g",
-                 label='predicted')
-    
-
 plt.legend()
 plt.show()
+
+for attempt in range(attempts):
+
+    model = LatentGP(D, N)
+    ground_truth_observation = model.observed_distribution(X, NOISE).sample()
+
+    best_loss = []
+    ds = list(range(1, D+3))
+    for d in ds:
+        model = LatentGP(d, N)
+        best_loss.append(model.fit(X, ground_truth_observation, noise=NOISE))
+
+    plt.plot(ds, best_loss)
+plt.xlabel("number of latent factors")
+plt.ylabel("loss")
+plt.show()
+
