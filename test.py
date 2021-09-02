@@ -10,14 +10,22 @@ import random
 np.set_printoptions(threshold=sys.maxsize)
 
 class LatentGP(nn.Module):
-    def __init__(self, D, N):
+    def __init__(self, D, N, inverse_beta=0.):
+        """inverse_beta: regularization coefficient for L1 norm of loading matrix
+        it has this name because this is equivalent to assuming that the loading matrix injuries are generated from a laplace distribution with this inverse scale"""
         super().__init__()
 
         self.D = D
         self.N = N
 
-        self.A = nn.Parameter(torch.randn(N, D)*((2./N)**0.5),
-                              requires_grad=True)
+        self.inverse_beta = inverse_beta
+        if inverse_beta > 0:
+            self.loading_matrix_prior = torch.distributions.laplace.Laplace(torch.zeros(N, D), inverse_beta/torch.ones(N, D))
+            A = self.loading_matrix_prior.sample()
+        else:
+            A = torch.randn(N, D)*((2./N)**0.5)
+            
+        self.A = nn.Parameter(A, requires_grad=True)
 
         self.kernel_scale = nn.Parameter(torch.randn(D), requires_grad=True)
         #self.kernel_magnitude = nn.Parameter(torch.randn(D), requires_grad=True)
@@ -122,7 +130,10 @@ class LatentGP(nn.Module):
             for T, X in observed_signals:
                 distribution = self.observed_distribution(torch.tensor(T).float(), noise=noise)
                 likelihood = distribution.log_prob(X).sum()
-                loss = loss -likelihood/len(observed_signals)
+                loss = loss -likelihood
+
+            if self.inverse_beta > 0:
+                loss = loss - self.loading_matrix_prior.log_prob(self.A).sum()
 
             loss.backward()
             optimizer.step()
@@ -250,11 +261,13 @@ def visualize_inference(D, N):
 def visualize_fitting(D, N):
     attempts = 4
     number_of_patients = 2
+
+    ib = 1.
     
     X = torch.linspace(0., 1., 20)    
     for attempt in range(attempts):
 
-        model = LatentGP(D, N)
+        model = LatentGP(D, N, inverse_beta=ib)
         
         ground_truth_observations = [(X, model.observed_distribution(X, NOISE).sample())
                                      for _ in range(number_of_patients) ]
@@ -262,7 +275,7 @@ def visualize_fitting(D, N):
         best_loss = []
         ds = list(range(1, D+3))
         for d in ds:
-            model = LatentGP(d, N)
+            model = LatentGP(d, N, inverse_beta=ib)
             best_loss.append(model.fit(ground_truth_observations, noise=NOISE, steps=5000))
 
         plt.plot(ds, best_loss)
@@ -272,4 +285,4 @@ def visualize_fitting(D, N):
     plt.show()
 
 visualize_inference(1, 2)
-visualize_fitting(3, 5)
+visualize_fitting(4, 6)
