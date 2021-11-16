@@ -221,7 +221,7 @@ def visualize_inference(D, N):
 
         for l in range(D):
             plt.plot(X, Z.numpy()[:,l],
-                     c="b", label="latent")
+                     c="b", label="latent" if l==0 else None)
 
         observed_signals = Z@model.A.T
         #v(ab)=b.t (*) I   @ v(a)
@@ -233,7 +233,7 @@ def visualize_inference(D, N):
 
         for l in range(N):
             plt.plot(X, observed_signals.detach().numpy()[:,l],
-                     c="r", label="training")
+                     c="r", label="observed"  if l==0 else None)
 
         joint_sample = model.joint_distribution(X, NOISE).sample()
         joint_sample_latent = reshape(joint_sample[:D*T], T, D)
@@ -248,11 +248,11 @@ def visualize_inference(D, N):
                          ls="--", c="r", label="obs joint")
 
     
-
+        
         conditional_inference = reshape(model.conditional_distribution(X, observed_signals, NOISE*1e-3).mean, T, D)
         for l in range(D):
             plt.plot(X,  conditional_inference.detach().numpy()[:,l],
-                     c="g", ls="-", label="conditional")
+                     c="g", ls="-", label="conditional"  if l==0 else None)
 
     plt.legend()
     plt.show()
@@ -284,5 +284,5 @@ def visualize_fitting(D, N):
     plt.title(f"{N} signals, {number_of_patients} tasks (patients)")
     plt.show()
 
-visualize_inference(1, 2)
+visualize_inference(2, 4)
 visualize_fitting(4, 6)
