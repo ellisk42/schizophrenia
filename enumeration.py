@@ -1,6 +1,6 @@
 import itertools
 from sympy import *
-
+#from modules import *
 
 
 
@@ -229,6 +229,9 @@ class Times(Expression):
         
         return x * y
 
+    def to_module(self):
+        return MultiplicationModule(self.x.to_module(), self.y.to_module())
+
     def arguments(self): return [self.x, self.y]
 
 
@@ -359,7 +362,7 @@ for i, e in enumerate(bottom_up_generator(10, operators, leaves, behavior)):
         variables = set()
     if set(symbols("z m b", positive=True, real=True)) <= variables:
         j+=1
-        print(j, i, e.pretty_print(), v, variables)
+        print("good program #", j, "\tprogram #", i, "\t\t", e.pretty_print(), "\tsimplifies to", v)
         
     if i>1000:
         #import pdb; pdb.set_trace()
